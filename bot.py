@@ -947,46 +947,50 @@ async def show_my_points(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def request_sks_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     app_url = "https://drive.google.com/drive/mobile/folders/1zSp_NnUhkJ3ErI19P1bvZLP5naTBjmNh?usp=drive_link"
     await update.message.reply_text(
-        f"📲 Скачайте приложение по ссылке: {app_url}\n"
-        "После установки пройдите быструю регистрацию и отправьте скриншот профиля СКС."
-        "Важно, чтобы на скриншоте были видно ваш профиль, а аватарка должна быть вашей настоящей фотографией, с лицом."
+        f"📲 Скачайте приложение по ссылке:\nДля андроида: {app_url}\n"
+        f"Для IOS: https://apps.apple.com/ru/app/скс-рф/id1473711942\n\n"
+        "После установки пройдите быструю регистрацию и отправьте скриншот профиля СКС вашему тьютору.\n"
+        "Важно, чтобы на скриншоте было видно ваш профиль, а аватарка должна быть вашей настоящей фотографией, с лицом."
     )
-    await update.message.reply_text("📸 Пожалуйста, отправьте скриншот вашего профиля СКС:")
     return SKS_PHOTO
 
 
 # Обработка фото для СКС
 async def handle_sks_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo = update.message.photo[-1] if update.message.photo else None
-    if photo:
-        user_id = update.effective_user.id
-        connection = get_db_connection()
-        if connection:
-            cursor = connection.cursor()
-            cursor.execute(
-                "INSERT INTO sks_applications (user_id, photo_url, status) VALUES (%s, %s, 'pending')",
-                (user_id, photo.file_id)
-            )
-            connection.commit()
-            cursor.close()
-            connection.close()
-
-            try:
-                await notify_admins_about_sks(update, context, user_id, photo.file_id)
-            except Exception as e:
-                logger.error(f"Ошибка уведомления админов: {e}")
-
-            await update.message.reply_text("✅ Заявка отправлена на рассмотрение!")
-            return await show_main_menu(update, context)
-        else:
-            await update.message.reply_text(
-                "⚠️ Ой! Не удалось подключиться к базе данных.\n"
-                "Попробуйте позже или обратитесь к администратору."
-            )
-            return SKS_PHOTO
-    else:
+    if not photo:
         await update.message.reply_text("❌ Пожалуйста, отправьте фото.")
         return SKS_PHOTO
+
+    user_id = update.effective_user.id
+    connection = get_db_connection()
+    if not connection:
+        await update.message.reply_text(
+            "⚠️ Не удалось подключиться к базе данных. Попробуйте позже."
+        )
+        return SKS_PHOTO
+
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            "INSERT INTO sks_applications (user_id, photo_url, status) VALUES (%s, %s, 'pending')",
+            (user_id, photo.file_id)
+        )
+        connection.commit()
+        cursor.close()
+        connection.close()
+    except Exception as e:
+        logger.error(f"Ошибка записи заявки СКС: {e}")
+        await update.message.reply_text("❌ Не удалось сохранить заявку. Попробуйте позже.")
+        return SKS_PHOTO
+
+    try:
+        await notify_admins_about_sks(update, context, user_id, photo.file_id)
+    except Exception as e:
+        logger.error(f"Ошибка уведомления админов: {e}")
+
+    await update.message.reply_text("✅ Заявка отправлена на рассмотрение!")
+    return await show_main_menu(update, context)
 
 
 # Уведомление админов о новой заявке СКС
@@ -997,7 +1001,7 @@ async def notify_admins_about_sks(update: Update, context: ContextTypes.DEFAULT_
         cursor.execute("SELECT * FROM users WHERE role = 'admin'")
         admins = cursor.fetchall()
         cursor.close()
-
+        sent = 0
         for admin in admins:
             if admin['telegram_id']:
                 keyboard = [
@@ -1005,7 +1009,6 @@ async def notify_admins_about_sks(update: Update, context: ContextTypes.DEFAULT_
                      InlineKeyboardButton("❌ Отклонить", callback_data=f"sks_reject_{user_id}")]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
-
                 try:
                     await context.bot.send_photo(
                         chat_id=admin['telegram_id'],
@@ -1013,10 +1016,12 @@ async def notify_admins_about_sks(update: Update, context: ContextTypes.DEFAULT_
                         caption="Новая заявка на подтверждение в СКС",
                         reply_markup=reply_markup
                     )
+                    sent += 1
                 except Exception as e:
                     logger.error(f"Ошибка отправки уведомления админу: {e}")
-
         connection.close()
+        if sent == 0:
+            await update.message.reply_text("❌ Не удалось отправить заявку ни одному админу. Проверьте настройки.")
 
 
 # Обработка отмены
